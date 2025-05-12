@@ -1,0 +1,1 @@
+$$x = \frac{ky}{P} \cdot (W(\frac{e^k \cdot ky}{P}))^{-1}$$

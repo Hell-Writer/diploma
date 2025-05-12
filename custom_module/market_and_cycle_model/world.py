@@ -10,6 +10,7 @@ class WorldModel(mesa.Model):
         super().__init__(seed=seed)
         self.num_buyers = num_buyers
         self.sorted_houses = None
+        self.vacant_houses = None
         self.mortgage_rate = mortgage_rate
         self.youth_mortgage_rate = YOUTH_MORTGAGE_RATE
         self.family_mortgage_rate = FAMILY_MORTGAGE_RATE
@@ -17,7 +18,9 @@ class WorldModel(mesa.Model):
         self.cash_bought = 0
         self.deaths = 0
         self.births = 0
+        self.transfert_spending = 0
         self.mortgage_rates = []
+        self.mortgage_durations = []
 
         # Создаём агентов
         Buyer.create_agents(model=self, n=num_buyers)
@@ -53,19 +56,26 @@ class WorldModel(mesa.Model):
                 "cash_bought": store_cash_bought,
                 "mortgages_bought": store_mortgages_bought,
                 "births": store_births,
-                "deaths": store_deaths
-
+                "deaths": store_deaths,
+                "hai": compute_hai,
+                "pir": compute_pir,
+                "government_reserve": store_government_reserves,
+                "taxes": store_taxes,
+                "transferts": store_transfert
             }
         )
         self.buyers_want_home = 0
     
     def update_world(self):
-        self.sorted_houses = self.agents_by_type[House].select(lambda x: x.owner == 'developer').sort(lambda x: x.price, ascending=True)
+        vacant_houses = self.agents_by_type[House].select(lambda x: x.owner == 'developer')
+        self.vacant_houses = vacant_houses
+        self.sorted_houses = vacant_houses.sort(lambda x: x.price, ascending=True)
         self.buyers_want_home = 0
         self.mortgages_bought = 0
         self.cash_bought = 0
         self.deaths = 0
         self.births = 0
+        self.transfert_spending = 0
         self.mortgage_rates = []
 
     def step(self):
@@ -115,15 +125,21 @@ def compute_average_wealth(model):
 #    return np.mean(agent_desired_price)
 
 def compute_pir(model):
-    agent_income = model.agents_by_type[Buyer].agg('wage', np.mean)
+    agent_income = model.agents_by_type[Buyer].agg('wage', np.mean) + (model.transfert_spending/len(model.agents_by_type[Buyer]))
     price = model.agents_by_type[Seller][0].sold_price_history[-2]
     return price / (12 * agent_income)
 
 def compute_hai(model):
-    agent_income = model.agents_by_type[Buyer].agg('wage', np.mean)
+    agent_income = model.agents_by_type[Buyer].agg('wage', np.mean) + (model.transfert_spending/len(model.agents_by_type[Buyer]))
     price = model.agents_by_type[Seller][0].sold_price_history[-2]
     avg_mortgage_rate = np.mean(model.mortgage_rates)
-    return price / (12 * agent_income)
+    monthly_mortgage_rate = avg_mortgage_rate/12
+    mortgage_duration_avg = np.mean(model.mortgage_durations[-50:])
+    mortgage_overpay_ratio = (
+        monthly_mortgage_rate + 
+        (monthly_mortgage_rate / ((1+monthly_mortgage_rate)**(mortgage_duration_avg) - 1))
+    ) * mortgage_duration_avg
+    return agent_income / ((1/0.35)*0.7*price*mortgage_overpay_ratio/mortgage_duration_avg)
 
 
 
@@ -169,3 +185,12 @@ def store_births(model):
 
 def store_deaths(model):
     return model.deaths
+
+def store_government_reserves(model):
+    return model.agents_by_type[Government][0].money_reserve
+
+def store_taxes(model):
+    return model.agents_by_type[Government][0].taxes
+
+def store_transfert(model):
+    return model.transfert_spending

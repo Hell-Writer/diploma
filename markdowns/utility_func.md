@@ -1,1 +1,2 @@
-$$U(x,y) = k \cdot f(x) + y$$
+$$U(x,y) = (\ln{x})^k \cdot y$$
+

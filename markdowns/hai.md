@@ -1,0 +1,1 @@
+$$HAI = \frac{Income}{\frac{1}{0.35} \cdot \frac{LTV \cdot OR \cdot Price}{t} }$$

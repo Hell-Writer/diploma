@@ -1,5 +1,6 @@
 import mesa
 import numpy as np
+from scipy.special import lambertw
 from .settings import *
 from math import floor
 
@@ -73,7 +74,9 @@ class Seller(mesa.Agent):
         #    0
         #)
         #self.produce_future.append(n_new_houses)
-        self.produce_future.append(30)
+        n_buyers = len(self.model.agents_by_type[Buyer])
+        build_rate = int((15 + np.random.randint(0,5)) * (n_buyers/14600)) * 2
+        self.produce_future.append(build_rate)
 
         # Готовимся к продажам
         self.sold_history.append(0)
@@ -95,6 +98,7 @@ class Buyer(mesa.Agent):
         self.kids_list = []
         self.additional_consumption = 0
         self.mortgage_monthly_payment = 0
+        self.is_informed = np.random.choice(a=[False, True], p=[0.5, 0.5])
         self.wage = np.random.choice( # Данные из https://rosstat.gov.ru/folder/13397 "Распределение населения по интервальным группам среднедушевых денежных доходов"
                 a=[
                     np.random.random() * 5000 + 5000,
@@ -226,11 +230,61 @@ class Buyer(mesa.Agent):
         if (len(government.houses) > 0) and (len(self.houses) == 0) and (self.age > ADOLESCENCE_AGE):
             self.houses.add(government.houses[0])
             government.houses.remove(government.houses[0])
+        if (government.taxes > TRANSFERT_AMOUNT) and government.redistribution_mode and ((self.wealth < 0) or (self.wage < 5*10**5)):
+        # Это немного случайный процесс. Кому-то повезёт, кому-то нет. Но в среднем все получат среднюю поддержку
+            if self.wage < 10**5:
+                self.wealth += 2*TRANSFERT_AMOUNT
+                government.taxes -= 2*TRANSFERT_AMOUNT
+                self.model.transfert_spending += 2*TRANSFERT_AMOUNT
+            else:
+                self.wealth += TRANSFERT_AMOUNT
+                government.taxes -= TRANSFERT_AMOUNT
+                self.model.transfert_spending += TRANSFERT_AMOUNT
+
+    def select_desired_amount_alt(self, price):
+        # TODO добавить первоначальный взнос в ипотеку
+        # Функция полезности x^(кол-во детей)*y -> max
+        remaining_life = OLD_AGE - self.age + 0.1 # +1 костыль, чтобы избегать ZeroDivisionError, когда чел умирает
+        mortgage_duration = remaining_life # В будущем поменять
+        disposable_income = self.wage * (1 - INCOME_TAX) - AUTONOMOUS_CONSUMPTION - self.mortgage_monthly_payment
+        predicted_wealth = self.wealth + disposable_income * mortgage_duration
+        mortgage_rates_list = [self.model.mortgage_rate]
+        if self.age < YOUTH_AGE: # Молодёжная ипотека
+            mortgage_rates_list.append(self.model.youth_mortgage_rate)
+        if len(self.kids_list) >= KIDS_THRESHOLD: # Семейная ипотека
+            mortgage_rates_list.append(self.model.family_mortgage_rate)
+        selected_mortgage_rate = min(mortgage_rates_list)
+        monthly_mortgage_rate = (1 + selected_mortgage_rate) ** (1/12) - 1
+        household_size = self.n_children + 1 # Дети + один родитель
+        if len(self.houses) == 0: # Если дома нет, то сильно увеличиваем его желание
+            household_size += 10 
+        mortgage_overpay_ratio = (
+            monthly_mortgage_rate + 
+            (monthly_mortgage_rate / ((1+monthly_mortgage_rate)**(mortgage_duration) - 1))
+        ) * mortgage_duration
+        desired_amount_cash = ( # Если покупка налом
+            (self.wealth * household_size) /
+            (price * lambertw(household_size*(self.wealth*np.e**(household_size))/price).real)
+        ) # Аналитически вычесленная формула максимума для конкретной функции полезности
+        desired_amount_mortgage = ( # Если покупка налом
+            (predicted_wealth * household_size) /
+            (price * (0.3 + 0.7*mortgage_overpay_ratio) * lambertw((household_size*predicted_wealth*np.e**household_size)/(price * (0.3 + 0.7*mortgage_overpay_ratio))).real)
+        ) # Аналитически вычесленная формула максимума для конкретной функции полезности
+        if desired_amount_cash > desired_amount_mortgage:
+            desired_home_cost = np.floor(desired_amount_cash) * price
+            if self.age > ADOLESCENCE_AGE: # Если человек взрослый, то он тратит на себя
+                self.additional_consumption = (predicted_wealth - desired_home_cost) * MARGINAL_CONSUMPTION_RATE / OLD_AGE
+            return ('cash', np.floor(desired_amount_cash), selected_mortgage_rate)
+        else:
+            desired_home_cost = np.floor(desired_amount_mortgage) * price * mortgage_overpay_ratio
+            if self.age > ADOLESCENCE_AGE:
+                self.additional_consumption = (predicted_wealth - desired_home_cost) * MARGINAL_CONSUMPTION_RATE / OLD_AGE
+            return ('mortgage', np.floor(desired_amount_mortgage), selected_mortgage_rate)
 
     def select_desired_amount(self, price):
         # TODO добавить первоначальный взнос в ипотеку
         # Функция полезности x^(кол-во детей)*y -> max
-        remaining_life = OLD_AGE - self.age + 0.1 # +1 костыль, чтобы избегать ZeroDivisionError, когда чел умирает
+        remaining_life = OLD_AGE - self.age + 1 # +1 костыль, чтобы избегать ZeroDivisionError, когда чел умирает
         mortgage_duration = remaining_life # В будущем поменять
         disposable_income = self.wage * (1 - INCOME_TAX) - AUTONOMOUS_CONSUMPTION - self.mortgage_monthly_payment
         predicted_wealth = self.wealth + disposable_income * mortgage_duration
@@ -269,26 +323,41 @@ class Buyer(mesa.Agent):
 
     def buy(self):
         # Процесс покупки
-        remaining_life = OLD_AGE - self.age + 0.1
+        remaining_life = OLD_AGE - self.age + 1
         mortgage_duration = remaining_life
+        government = self.model.agents_by_type[Government][0]
         if self.age < ADOLESCENCE_AGE: # Подростки не могут покупать
             return None
         if len(self.model.sorted_houses) > 0:
-            house = self.model.sorted_houses[0]
+            if self.is_informed:
+                house = self.model.sorted_houses[0]
+            else:
+                house = self.model.vacant_houses[0]
             seller = self.model.agents_by_type[Seller][0]
-            buying_type, targeted_house_number, selected_mortgage_rate = self.select_desired_amount(house.price)
+            buying_type, targeted_house_number, selected_mortgage_rate = self.select_desired_amount_alt(house.price)
         else:
             self.model.buyers_want_home += 1
             return None
         if targeted_house_number > len(self.houses):
             if buying_type == 'mortgage': # Если ипотека -  ежемесячно снимаем деньги
-                monthly_mortgage_rate = self.model.mortgage_rate ** (1/12)
-                self.mortgage_monthly_payment += (
+                monthly_mortgage_rate = (1 + selected_mortgage_rate) ** (1/12) - 1
+                monthly_payment = (
                         monthly_mortgage_rate + 
                         (monthly_mortgage_rate / ((1+monthly_mortgage_rate)**(mortgage_duration) - 1))
-                    ) * house.price / mortgage_duration
+                    ) * house.price * 0.7 / mortgage_duration # Ежемесячный платёж
+                self.mortgage_monthly_payment += monthly_payment
+                if selected_mortgage_rate < self.model.mortgage_rate:
+                    full_mortgage_rate = (1+government.mortgage_percent_help + monthly_mortgage_rate)** (1/12)
+                    full_payment = (
+                        full_mortgage_rate + 
+                        (full_mortgage_rate / ((1+full_mortgage_rate)**(mortgage_duration) - 1))
+                    ) * house.price * 0.7 / mortgage_duration
+                    government.money_reserve -= (full_payment - monthly_payment) * mortgage_duration
+                    print((full_payment - monthly_payment) * mortgage_duration)
+                self.wealth -= house.price * 0.3 # Первоначальный взнос
                 self.model.mortgages_bought += 1
                 self.model.mortgage_rates.append(selected_mortgage_rate)
+                self.model.mortgage_durations.append(mortgage_duration)
             elif buying_type == 'cash': # Если налик - снимаем деньги разово
                 self.wealth -= house.price
                 self.model.cash_bought += 1
@@ -296,6 +365,7 @@ class Buyer(mesa.Agent):
             house.owner = self.unique_id  # Меняем владельца дома
             seller.house_bought(house.price)  # Изменяем резервы продавца
             self.model.sorted_houses.remove(house)
+            self.model.vacant_houses.remove(house)
 
 
     def __str__(self):
@@ -310,6 +380,9 @@ class Government(mesa.Agent):
         self.taxes = 0
         self.houses = mesa.agent.AgentSet([])
         self.inheritant_income = 0
+        self.is_spending = False
+        self.redistribution_mode = False
+        self.mortgage_percent_help = 0
     
     def get_lost_inheritance(self, houses, wealth):
         self.inheritant_income += wealth
@@ -334,4 +407,5 @@ class House(mesa.Agent):
         # Менять дни без покупателя можно и без этой функции
         # Но с ней через self.do() легко делать это для нескольких домов одновременно
         self.months_without_buyer += 1
-        self.price = max(0.95*self.price, MINIMUM_PRICE)
+        if self.months_without_buyer > 2:
+            self.price = max(0.95*self.price, MINIMUM_PRICE)

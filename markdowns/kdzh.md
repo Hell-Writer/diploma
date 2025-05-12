@@ -1,0 +1,1 @@
+$$КДЖ = \frac {Price} {12 \cdot Income}$$

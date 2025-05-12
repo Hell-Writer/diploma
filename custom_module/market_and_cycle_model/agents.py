@@ -244,7 +244,7 @@ class Buyer(mesa.Agent):
     def select_desired_amount_alt(self, price):
         # TODO добавить первоначальный взнос в ипотеку
         # Функция полезности x^(кол-во детей)*y -> max
-        remaining_life = OLD_AGE - self.age + 0.1 # +1 костыль, чтобы избегать ZeroDivisionError, когда чел умирает
+        remaining_life = OLD_AGE - self.age + 1 # +1 костыль, чтобы избегать ZeroDivisionError, когда чел умирает
         mortgage_duration = remaining_life # В будущем поменять
         disposable_income = self.wage * (1 - INCOME_TAX) - AUTONOMOUS_CONSUMPTION - self.mortgage_monthly_payment
         predicted_wealth = self.wealth + disposable_income * mortgage_duration
@@ -281,46 +281,6 @@ class Buyer(mesa.Agent):
                 self.additional_consumption = (predicted_wealth - desired_home_cost) * MARGINAL_CONSUMPTION_RATE / OLD_AGE
             return ('mortgage', np.floor(desired_amount_mortgage), selected_mortgage_rate)
 
-    def select_desired_amount(self, price):
-        # TODO добавить первоначальный взнос в ипотеку
-        # Функция полезности x^(кол-во детей)*y -> max
-        remaining_life = OLD_AGE - self.age + 1 # +1 костыль, чтобы избегать ZeroDivisionError, когда чел умирает
-        mortgage_duration = remaining_life # В будущем поменять
-        disposable_income = self.wage * (1 - INCOME_TAX) - AUTONOMOUS_CONSUMPTION - self.mortgage_monthly_payment
-        predicted_wealth = self.wealth + disposable_income * mortgage_duration
-        mortgage_rates_list = [self.model.mortgage_rate]
-        if self.age < YOUTH_AGE: # Молодёжная ипотека
-            mortgage_rates_list.append(self.model.youth_mortgage_rate)
-        if len(self.kids_list) >= KIDS_THRESHOLD: # Семейная ипотека
-            mortgage_rates_list.append(self.model.family_mortgage_rate)
-        selected_mortgage_rate = min(mortgage_rates_list)
-        monthly_mortgage_rate = (1 + selected_mortgage_rate) ** (1/12) - 1
-        household_size = self.n_children + 1 # Дети + один родитель
-        if len(self.houses) == 0: # Если дома нет, то сильно увеличиваем его желание
-            household_size += 10 
-        mortgage_overpay_ratio = (
-            monthly_mortgage_rate + 
-            (monthly_mortgage_rate / ((1+monthly_mortgage_rate)**(mortgage_duration) - 1))
-        ) * mortgage_duration
-        desired_amount_cash = ( # Если покупка налом
-            (self.wealth * household_size) /
-            ((household_size + 1) * price)
-        ) # Аналитически вычесленная формула максимума для конкретной функции полезности
-        desired_amount_mortgage = ( # Если покупка ипотекой
-            (predicted_wealth * household_size) /
-            ((household_size + 1) * price * mortgage_overpay_ratio)
-        ) # Аналитически вычесленная формула максимума для конкретной функции полезности
-        if desired_amount_cash > desired_amount_mortgage:
-            desired_home_cost = np.floor(desired_amount_cash) * price
-            if self.age > ADOLESCENCE_AGE: # Если человек взрослый, то он тратит на себя
-                self.additional_consumption = (predicted_wealth - desired_home_cost) * MARGINAL_CONSUMPTION_RATE / mortgage_duration
-            return ('cash', np.floor(desired_amount_cash), selected_mortgage_rate)
-        else:
-            desired_home_cost = np.floor(desired_amount_mortgage) * price * mortgage_overpay_ratio
-            if self.age > ADOLESCENCE_AGE:
-                self.additional_consumption = (predicted_wealth - desired_home_cost) * MARGINAL_CONSUMPTION_RATE / mortgage_duration
-            return ('mortgage', np.floor(desired_amount_mortgage), selected_mortgage_rate)
-
     def buy(self):
         # Процесс покупки
         remaining_life = OLD_AGE - self.age + 1
@@ -344,16 +304,16 @@ class Buyer(mesa.Agent):
                 monthly_payment = (
                         monthly_mortgage_rate + 
                         (monthly_mortgage_rate / ((1+monthly_mortgage_rate)**(mortgage_duration) - 1))
-                    ) * house.price * 0.7 / mortgage_duration # Ежемесячный платёж
+                    ) * house.price * 0.7 # Ежемесячный платёж
                 self.mortgage_monthly_payment += monthly_payment
-                if selected_mortgage_rate < self.model.mortgage_rate:
-                    full_mortgage_rate = (1+government.mortgage_percent_help + monthly_mortgage_rate)** (1/12)
+                if (selected_mortgage_rate < self.model.mortgage_rate) or government.is_spending:
+                    full_mortgage_rate = (government.mortgage_percent_help + (1+monthly_mortgage_rate)**12 )** (1/12) - 1 
                     full_payment = (
                         full_mortgage_rate + 
                         (full_mortgage_rate / ((1+full_mortgage_rate)**(mortgage_duration) - 1))
-                    ) * house.price * 0.7 / mortgage_duration
+                    ) * house.price * 0.7
                     government.money_reserve -= (full_payment - monthly_payment) * mortgage_duration
-                    print((full_payment - monthly_payment) * mortgage_duration)
+                    self.model.program_spending += (full_payment - monthly_payment) * mortgage_duration
                 self.wealth -= house.price * 0.3 # Первоначальный взнос
                 self.model.mortgages_bought += 1
                 self.model.mortgage_rates.append(selected_mortgage_rate)

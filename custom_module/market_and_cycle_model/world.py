@@ -18,6 +18,7 @@ class WorldModel(mesa.Model):
         self.cash_bought = 0
         self.deaths = 0
         self.births = 0
+        self.program_spending = 0
         self.transfert_spending = 0
         self.mortgage_rates = []
         self.mortgage_durations = []
@@ -61,7 +62,8 @@ class WorldModel(mesa.Model):
                 "pir": compute_pir,
                 "government_reserve": store_government_reserves,
                 "taxes": store_taxes,
-                "transferts": store_transfert
+                "transferts": store_transfert,
+                "program_spending": store_program_spending
             }
         )
         self.buyers_want_home = 0
@@ -194,3 +196,7 @@ def store_taxes(model):
 
 def store_transfert(model):
     return model.transfert_spending
+
+
+def store_program_spending(model):
+    return model.program_spending

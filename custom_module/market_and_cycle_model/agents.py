@@ -75,7 +75,7 @@ class Seller(mesa.Agent):
         #)
         #self.produce_future.append(n_new_houses)
         n_buyers = len(self.model.agents_by_type[Buyer])
-        build_rate = int((15 + np.random.randint(0,5)) * (n_buyers/14600)) * 2
+        build_rate = int((15 + np.random.randint(0,5)) * (n_buyers/14600)) * 2 + int((avg_sold - self.reserve_history[-1])/14600)
         self.produce_future.append(build_rate)
 
         # Готовимся к продажам
